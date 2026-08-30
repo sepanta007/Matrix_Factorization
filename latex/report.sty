@@ -1,0 +1,169 @@
+%%-------------------------------------
+%% Page margin settings - % half inch margin all sides
+%%-------------------------------------
+\usepackage[margin=1.2in]{geometry} 
+
+%%-------------------------------------
+%% Font settings - % Sans-serif font
+%%-------------------------------------
+% Switch the following section off to revert back to defult LaTex font
+% DISABLE final line to permit small caps with a warning; default for algorithm function name
+\usepackage[T1]{fontenc}  % Set up font encoding to T1, which is suitable for European languages and provides better hyphenation and character support
+\usepackage{lmodern}      % Load the Latin Modern font family, which is an enhanced version of Computer Modern with more characters and font shapes
+\renewcommand*\familydefault{\sfdefault}  % Change the default font family to sans-serif (lmss), so the entire document uses a sans-serif font by default
+\usepackage{slantsc}  % Adjusts the appearance of small caps and slanted fonts
+\usepackage{relsize}  % Enables relative font size changes, useful for adjusting the size of fonts in commands
+\usefont{T1}{lmss}{m}{n}\selectfont  % Force LaTeX to load the lmss font family for next line
+\DeclareFontShape{T1}{lmss}{m}{sc}{<->ssub*lmss/m/n}{}  % Declare a new font shape for small caps in the 'lmss' font family; This tells LaTeX that when small caps (sc) are requested in the medium weight (m) of 'lmss', it should substitute it with the normal (n) shape
+
+
+
+
+
+%%-------------------------------------
+%% Math/Definition/Theorem/Algorithm packages settings 
+%%-------------------------------------
+\usepackage{sansmath}
+\sansmath
+\usepackage[cmex10]{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\newtheorem{mydef}{Definition}
+\newtheorem{mytherm}{Theorem}
+
+%%-------------------------------------
+%% Algorithms/Code Listing environment settings  - 
+%% Please do not change these settings
+%%-------------------------------------
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\renewcommand{\algorithmicrequire}{\textbf{Input:}}
+\renewcommand{\algorithmicensure}{\textbf{Output:}}
+\usepackage[utf8]{inputenc}
+\usepackage{listings}
+\usepackage{xcolor}
+\definecolor{codegreen}{rgb}{0.25,0.45,0.25}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codeblue}{rgb}{0.10,0.00,1.00}
+\definecolor{codepurple}{rgb}{0.5, 0.25, 0.5}
+\definecolor{codeskyblue}{rgb}{0.341, 0.408, 0.941}
+\definecolor{codelightgreen}{rgb}{0.133, 0.918, 0.333}
+\definecolor{codelightblue}{rgb}{0.121,0.858,0.858}
+\definecolor{codenavyblue}{rgb}{0.114,0.267,0.467}
+\definecolor{codeorange}{rgb}{0.85, 0.45, 0.1}
+\definecolor{codeviolet}{rgb}{0.42, 0.17, 0.61}
+\definecolor{backcolour}{rgb}{0.97,0.97,0.98}
+\definecolor{codeframe}{rgb}{0.8,0.8,0.82}
+
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},
+    commentstyle=\itshape\color{codegreen},
+    keywordstyle=\bfseries\color{codenavyblue},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=8pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2,
+    frame=single,
+    rulecolor=\color{codeframe},
+    framesep=4pt,
+    framerule=0.4pt,
+    xleftmargin=2pt,
+    xrightmargin=2pt,
+    aboveskip=8pt,
+    belowskip=8pt
+}
+\lstset{style=mystyle}
+% the repository-layout listing in the appendix is a plain-text directory
+% diagram, not real shell code -- no language means no (wrong) keyword matches
+\lstdefinestyle{plaintext}{
+    style=mystyle,
+    numbers=none,
+    keywordstyle=\normalfont,
+}
+
+%%-------------------------------------
+%% Graphics/Figures environment settings
+%%-------------------------------------
+\usepackage{graphicx}
+\usepackage{subfigure}
+\usepackage{caption}
+\usepackage{lipsum}
+\usepackage{svg}
+\usepackage{float} % enables the [H] exact-placement float specifier
+
+%%-------------------------------------
+%% Table environment settings
+%%-------------------------------------
+\usepackage{multirow}
+\usepackage{rotating}
+\usepackage{makecell}
+\usepackage{booktabs}
+%\usepackage{longtable,booktabs}
+
+%%-------------------------------------
+%% Bullet lists
+%%-------------------------------------
+\usepackage{enumitem}
+\newlist{bulletlist}{itemize}{1}
+\setlist[bulletlist]{
+  label=$\bullet$,
+  leftmargin=*,
+  labelindent=0.5cm,
+  topsep=0.8\baselineskip,
+  itemsep=0.3\baselineskip
+}
+%%-------------------------------------
+%% List of Abbreviations settings
+%%-------------------------------------
+\usepackage{enumitem}
+\newlist{abbrv}{itemize}{1}
+\setlist[abbrv,1]{label=,labelwidth=1in,align=parleft,itemsep=0.1\baselineskip,leftmargin=!}
+
+%%-------------------------------------
+%% Link and reference configuration
+%%-------------------------------------
+\usepackage[hidelinks]{hyperref}
+\usepackage[nameinlink]{cleveref}
+\definecolor{DarkBlue}{rgb}{0.00,0.00,0.50}
+\hypersetup{colorlinks=true,
+            linkcolor=blue,
+            filecolor=magenta,
+            urlcolor=cyan,
+            citecolor=DarkBlue,
+            pdftitle={Fast Matrix Factorization for Online Recommendation -- A PySpark eALS Implementation},
+            }
+
+%%-------------------------------------
+%% Bibliography/References settings - Harvard Style was used in this report
+%%-------------------------------------
+\usepackage[hidelinks]{hyperref}
+\usepackage[nameinlink]{cleveref}
+\usepackage{xurl}
+\urlstyle{same}
+\definecolor{DarkBlue}{rgb}{0.00,0.00,0.50}
+\hypersetup{colorlinks=true,
+            linkcolor=blue,
+            filecolor=magenta,
+            urlcolor=cyan,
+            citecolor=DarkBlue,
+            }
+\usepackage[semicolon,authoryear]{natbib}
+\renewcommand{\bibname}{References}
+
+%%-------------------------------------
+%% Appendix settings     
+%%-------------------------------------
+\usepackage[toc]{appendix}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%                     SETTING ENDS                                            %%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

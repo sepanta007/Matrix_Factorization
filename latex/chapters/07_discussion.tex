@@ -1,0 +1,114 @@
+\chapter{Discussion}
+\label{ch:discussion}
+
+This chapter steps back from individual figures and tables to ask what the
+experiments in Chapters~\ref{ch:results} and~\ref{ch:scalability} actually
+established, where they fell short of the paper's own results, and why.
+
+\section{What worked}
+
+\textbf{The efficiency claim holds up, in a setting the paper never
+tested.} The paper's argument for eALS is that it avoids the $O(K^3)$
+matrix inversion of classical whole-data ALS while staying exactly as
+parallelizable. Both halves were checked directly: Section~\ref{sec:scale_k}
+measured $10.9\times$ growth in training time for a $16\times$ growth in
+$K$, nowhere close to the $4096\times$ a genuinely cubic solver would need.
+Section~\ref{sec:parallel}'s independence argument, that the parallel and
+sequential update rules are mathematically identical and not merely
+``close enough'', was validated against a synthetic dataset
+(Section~\ref{sec:correctness}) with no special-casing for the distributed
+execution path.
+
+\medskip
+\textbf{Exact parallelism is a real advantage over gradient-based
+alternatives.} Every worker in the user-update sweep reads the same frozen
+$Q$ and $S^q$ and writes to a disjoint slice of $P$, so there is no
+analogue of the gradient-conflict problem that makes naively parallelized
+SGD either slow (if synchronized) or approximate (if not). This is the
+paper's own argument, but building the actual PySpark version confirmed
+that it survives contact with a real distributed runtime rather than
+remaining a property of the equations alone.
+
+\medskip
+\textbf{The optimal missing-data weight $c_0=512$ transferred exactly.}
+Given how differently this project's dataset was curated compared to the
+paper's 2016 snapshot (a third of the users, a fifth of the interactions,
+see Table~\ref{tab:dataset}), it was not obvious that an absolute-magnitude
+hyperparameter like $c_0$ would land on the same optimum. That it did
+(Figure~\ref{fig:weighting_c0}) is a reassuring sign that the underlying
+mechanism, balancing observed-data loss against a much larger pool of
+weighted missing entries, behaves consistently across dataset scale, at
+least along this one axis.
+
+\section{What did not work as well, and why}
+\label{sec:weaknesses}
+
+\textbf{Popularity-aware weighting's advantage over uniform weighting was
+much smaller here than in the paper.} The paper reports a statistically
+significant improvement from $\alpha=0$ to $\alpha\approx0.4$, confirmed
+with a paired $t$-test across repeated trials; this project found only a
+marginal, statistically untested difference (Section~\ref{sec:weighting}).
+Three factors plausibly contribute, though this project's setup cannot
+fully separate them: the dataset is roughly a fifth the size of the
+paper's, and popularity skew tends to be less extreme in smaller,
+more heavily-filtered samples; the sampled-negative evaluation protocol
+(Chapter~\ref{ch:protocol}) is a coarser ranking signal than the paper's
+full-catalog ranking and could plausibly wash out a small real effect; and
+each configuration here was trained once, with no repeated runs to average
+out initialization noise, unlike the paper's repeated-trial significance
+tests. Repeating every configuration and re-running full-catalog evaluation
+at scale were not practical within this project's resources, but both
+would be the direct way to determine whether the gap is a property of the
+dataset or of these measurement choices.
+
+\medskip
+\textbf{Parallelism stopped helping past four partitions, on this
+machine.} Section~\ref{sec:scale_par} found the sweet spot at 4 partitions
+on a 4-core laptop, with 8 and 16 performing slightly worse. This is a
+finding about the hardware, not the algorithm: the update rule stays
+exactly as parallelizable at 16 partitions as at 4
+(Section~\ref{sec:parallel}'s argument does not depend on partition
+count), but Spark's per-task scheduling overhead does not shrink with the
+work each task has to do, so past a point adding partitions only adds
+overhead. On a real multi-node cluster the constraint shifts from
+per-task scheduling to inter-node transfer of the broadcast $Q$/$S^q$
+matrices, so this experiment's specific numbers would not transfer, though
+the underlying diminishing-returns trade-off almost certainly would.
+Confirming that on real cluster hardware was outside what this project
+could test.
+
+\medskip
+\textbf{The inner update loop is plain Python, not vectorized across
+users.} Listing~\ref{lst:update_users} loops over one user at a time
+inside each partition, even though a single user's update is only a
+handful of NumPy operations over a short neighbor list. That per-user
+Python overhead is the most likely reason MLlib's JVM-native ALS is
+$3$-$6\times$ faster in absolute terms across every $K$ tested in
+Section~\ref{sec:scale_mllib}, despite implementing a costlier theoretical
+algorithm. Batching several users' updates into fewer, larger NumPy calls
+would likely close much of that gap without touching the parallelization
+strategy or the underlying math at all. This was not attempted here, since
+closing an implementation-efficiency gap is a different question from
+validating the paper's algorithmic claims, which is what this project
+prioritized.
+
+\medskip
+\textbf{Scope: offline eALS only, not the paper's online extension.} As
+flagged in Chapter~\ref{ch:intro}, this project implements the paper's
+Algorithm~1 and its parallelization, not Algorithm~2 (the incremental
+online update) or the online evaluation protocol of the paper's
+Section~5.3. This matches the assignment brief, which asks specifically
+for an efficient, parallelizable MF-ALS algorithm, but it does mean this
+report cannot speak to the ``online recommendation'' half of the paper's
+title.
+
+\medskip
+Two of these gaps, the smaller popularity-weighting effect and the
+non-matching absolute accuracy numbers, trace back to the same root
+cause: a differently-curated, roughly five-times-smaller dataset than the
+paper's, combined with a coarser sampled-negative evaluation used to keep
+the scalability study tractable. Both choices are stated where they are
+made (Chapter~\ref{ch:protocol}), and their combined effect is that this
+report's accuracy numbers are internally consistent with each other but
+should not be read as digit-for-digit comparable to the paper's own Table
+and Figure values.

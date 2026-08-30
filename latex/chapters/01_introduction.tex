@@ -1,0 +1,94 @@
+\chapter{Introduction}
+\label{ch:intro}
+
+Recommender systems built on \textbf{matrix factorization} (MF) represent
+users and items as vectors in a shared latent space and predict a
+user-item affinity as their inner product. The technique is well
+understood for \emph{explicit} feedback, where a rating directly measures
+preference and the large mass of unrated pairs can be safely ignored during
+training. Most real deployments, however, do not have ratings. They have
+\emph{implicit} signals: clicks, purchases, views, reviews, which are only
+ever positive. A user who never interacted with an item might dislike it,
+might simply not know it exists, or might not have had the opportunity to
+see it. This one-class problem, together with the sheer number of
+unobserved pairs (millions of users times tens of thousands of items),
+makes implicit-feedback MF both statistically and computationally harder
+than its explicit counterpart.
+
+\section{The paper}
+
+This project is built around \citet{he2016eals}, \emph{Fast Matrix
+Factorization for Online Recommendation with Implicit Feedback} (SIGIR
+2016). The paper attacks the implicit-feedback problem on two fronts.
+First, it argues that treating every unobserved entry as an equally weak
+negative signal, the standard simplification introduced by
+\citet{hu2008implicit}, throws away information a content provider usually
+has for free: an item that was shown to many users but rarely interacted
+with is a much stronger negative signal than an item nobody has seen. The
+paper turns this intuition into a closed-form, popularity-based weighting
+scheme for missing entries. Second, and this is the part this report
+focuses on, it observes that once the missing data is weighted
+non-uniformly, the classical ALS solver becomes prohibitively slow. That
+solver updates a whole user or item vector at once by inverting a
+$K\times K$ matrix, where $K$ is the number of latent factors each user and
+item is represented with, and the memoization trick that makes
+uniform-weight ALS tractable no longer applies once the weights vary per
+item. The authors' fix, \textbf{eALS} (element-wise ALS), updates one
+latent factor at a time in closed form. This avoids matrix inversion
+entirely and reduces the per-iteration complexity from
+$O((M+N)K^3 + |\mathcal{R}|K^2)$ to $O((M+N)K^2+|\mathcal{R}|K)$, where $M$
+and $N$ are the numbers of users and items and $\mathcal{R}$ is the set of
+observed interactions. Chapter~\ref{ch:formulation} restates all of this
+notation formally before deriving eALS's update rule in
+Chapter~\ref{ch:methods}.
+
+\medskip
+The paper states that this element-wise update is \emph{embarrassingly
+parallel}: each user's (item's) update only depends on quantities that stay
+frozen for the duration of a sweep. The authors' own implementation is
+single-threaded Java, though, and no distributed version is provided.
+
+\section{What this project does}
+
+Following the assignment brief, this report:
+
+\begin{enumerate}
+  \item implements eALS (Algorithm~1 of the paper) as a genuine PySpark job
+        rather than a single-machine simulation dressed up in Spark syntax:
+        every update in every iteration is dispatched as an RDD
+        transformation and executed by Spark's own task scheduler across
+        partitions;
+  \item evaluates it on the Amazon ``Movies and TV'' dataset, one of the two
+        datasets used in the original paper (the other, the Yelp Challenge
+        dataset, is no longer distributed by Yelp in the form the paper
+        used, so this report does not attempt to reconstruct it);
+  \item reproduces the paper's own experimental protocol as closely as
+        practical (10-core filtering, leave-one-out evaluation, Hit Ratio
+        and NDCG) and extends it with a dedicated scalability study
+        against the number of latent factors, the degree of parallelism,
+        and the training-set size, since this is the property the paper's
+        central claim rests on but never measures directly in a
+        distributed setting.
+\end{enumerate}
+
+\medskip
+The paper's title promises \emph{online} recommendation, which in the
+authors' terminology refers to a second contribution: an incremental
+update rule (their Algorithm~2) that refreshes the model in $O(K^2)$ time
+given a single new interaction, without retraining from scratch. This
+report deliberately does not implement that part: the assignment brief asks
+for ``an efficient matrix factorization ALS algorithm'' that ``can be
+easily parallelized'', which describes Algorithm~1, not the online
+extension built on top of it. This scope decision is flagged explicitly
+here rather than left to surface as an omission later.
+
+\medskip
+The remainder of this report is organized as follows. Chapter~\ref{ch:formulation}
+formalizes the optimization problem eALS solves. Chapter~\ref{ch:methods}
+derives the element-wise update rule and describes how it was mapped onto
+Spark's execution model. Chapter~\ref{ch:protocol} describes the dataset,
+preprocessing, and evaluation protocol. Chapters~\ref{ch:results} and
+\ref{ch:scalability} report the accuracy and scalability experiments.
+Chapter~\ref{ch:discussion} discusses what worked, what did not, and where
+this implementation departs from the paper. Chapter~\ref{ch:conclusion}
+concludes.

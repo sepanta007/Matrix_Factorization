@@ -1,0 +1,35 @@
+\chapter*{\centering \Large Abstract}
+
+\noindent
+He et al. \citep{he2016eals} introduce eALS, an element-wise Alternating
+Least Squares learner for matrix factorization on implicit feedback that
+removes the two main bottlenecks of earlier whole-data ALS solutions: the
+cubic dependency on the number of latent factors $K$ inherited from matrix
+inversion, and the uniform weighting of unobserved (missing) entries, which
+the authors replace with an item-popularity-aware scheme. The paper proves
+that the resulting per-factor update rule is embarrassingly parallel, but
+ships no distributed implementation to back that claim up.
+
+\medskip
+This report closes that gap. eALS is implemented from scratch in PySpark,
+following Algorithm~1 of the paper equation by equation and parallelized by
+partitioning the user (respectively item) index space across executors,
+along the lines the paper's Section~4.2.1 describes but does not build. The
+implementation is evaluated on the Amazon ``Movies and TV'' implicit-feedback
+dataset, one of the two datasets used in the original paper, filtered with
+the same 10-core protocol and evaluated with the same leave-one-out,
+Hit-Ratio/NDCG methodology. We reproduce the paper's two main experiments:
+the impact of the missing-data weighting parameters $c_0$ and $\alpha$, and
+the convergence behaviour of eALS against a uniform-weight ablation. We also
+add a dedicated scalability study, something the paper only discusses
+qualitatively, measuring training time per iteration against the number of
+latent factors, the degree of Spark parallelism, and the size of the
+training set. On this dataset eALS scales close to linearly in $K$ (roughly
+$\times 11$ from $K{=}8$ to $K{=}128$, against the $\times 16$ a cubic
+dependency would need), which confirms the paper's central efficiency
+claim. It also exposes a practical limit the paper's single-thread
+benchmarks never had to confront: on a single machine, Spark's
+task-scheduling overhead outweighs the benefit of more partitions beyond
+roughly four to eight. All code, the full experimental log, and a
+small-data notebook that exercises the entire pipeline end to end are
+included in the appendix.

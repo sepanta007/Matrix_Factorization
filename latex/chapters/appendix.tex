@@ -1,0 +1,127 @@
+\chapter{Code and Reproducibility}
+\label{app:code}
+
+\section{Repository layout}
+
+The project repository is organized as follows; every path below is
+relative to the project root.
+
+\begin{lstlisting}[style=plaintext, caption={Repository layout.}]
+src/
+  eals.py             eALS core algorithm (Algorithm 1), PySpark RDD-based
+  baselines.py        Spark MLlib ALS reference baseline
+  evaluate.py         HR@K / NDCG@K leave-one-out evaluation
+  preprocess.py        raw Amazon reviews -> filtered train/test parquet
+  run_experiments.py    weighting / convergence / scalability experiments
+  plot_results.py        turns results/*.csv into the figures used in this report
+tests/
+  test_eals_synthetic.py  correctness check on a small synthetic dataset
+notebooks/
+  eals_demo.ipynb           small-data, end-to-end, fully executed notebook
+data/
+  raw/                 downloaded Amazon ratings CSV
+  processed/             filtered/reindexed train & test parquet
+results/
+  *.csv                    experiment outputs
+  figures/*.png              figures used throughout this report
+\end{lstlisting}
+
+\section{Reproducing the experiments}
+
+\begin{lstlisting}[language=bash, caption={Commands to reproduce every experiment in this report from scratch.}]
+python -m venv .venv && source .venv/bin/activate
+pip install pyspark numpy pandas scipy matplotlib jupyter nbformat pyarrow setuptools
+
+# 1. Download and filter the dataset
+curl -o data/raw/ratings_Movies_and_TV.csv \
+  https://snap.stanford.edu/data/amazon/productGraph/categoryFiles/ratings_Movies_and_TV.csv
+python src/preprocess.py --raw data/raw/ratings_Movies_and_TV.csv \
+  --out data/processed --min-interactions 10
+
+# 2. Run the weighting / convergence / scalability study
+python src/run_experiments.py --data data/processed --out results
+python src/plot_results.py --results results
+
+# 3. Correctness check on synthetic data
+python tests/test_eals_synthetic.py
+
+# 4. Execute the small-data demonstration notebook end to end
+jupyter nbconvert --to notebook --execute --inplace notebooks/eals_demo.ipynb
+\end{lstlisting}
+
+\section{The small-data demonstration notebook}
+\label{app:notebook}
+
+\texttt{notebooks/eals\_demo.ipynb} exercises the entire pipeline, from data
+generation through training, evaluation, and inspection of the learned
+model, on data small enough to read and verify by hand. It does not depend on the
+large Amazon download being present (it is skipped gracefully, with a
+printed message, if \texttt{data/processed/} does not exist). Each code
+cell carries short comments explaining what it reads and what it produces
+where that is not obvious from the code itself. The notebook was executed
+top to bottom with \texttt{jupyter nbconvert --execute} immediately before
+this report was finalized, with zero errors in any cell; its structure is:
+
+\begin{enumerate}
+  \item \textbf{Setup.} \emph{Input:} none. \emph{Output:} a local Spark
+        session, with \texttt{src/eals.py} registered via
+        \texttt{sc.addPyFile} so the closed-form update functions are
+        importable on Spark's (local) executors, not just the driver.
+  \item \textbf{Synthetic dataset.} \emph{Input:} none (a deterministic
+        generator with a fixed seed). \emph{Output:} \texttt{train\_pairs}/
+        \texttt{test\_pairs} for three disjoint 15-user/15-item
+        communities (45 users, 45 items, 225 training interactions, 45
+        held-out test interactions), small enough that a reader can
+        manually verify the block structure the model is expected to
+        recover.
+  \item \textbf{Training.} \emph{Input:} the synthetic training pairs.
+        \emph{Output:} a fitted \texttt{EALS} model
+        (\texttt{model.P}, \texttt{model.Q}) and its per-iteration loss
+        history, plotted to show monotonic-ish convergence (loss drops
+        from 145.7 to 83.8 over 20 iterations).
+  \item \textbf{Inspecting recommendations.} \emph{Input:} the trained
+        model and a probed user id. \emph{Output:} that user's top-10
+        recommended items, printed with their true community label. All
+        ten come from the user's own community, the expected result
+        for a correctly trained model on this synthetic structure.
+  \item \textbf{Offline evaluation.} \emph{Input:} the trained model and
+        the held-out test pairs. \emph{Output:} HR@10/NDCG@10 computed
+        two ways: \texttt{evaluate\_full}, the paper's exact protocol
+        (ranking against the whole 45-item catalog, tractable here because
+        the catalog is tiny), and \texttt{evaluate\_sampled}, the
+        relaxed protocol used for the large-scale experiments in this
+        report.
+  \item \textbf{Real-data subsample (optional).} \emph{Input:} a random
+        300-user subsample of the preprocessed train/test parquet files
+        under \texttt{data/processed/}, if present. \emph{Output:} the
+        same training/evaluation pipeline
+        run on real (if reduced) Amazon interaction data, producing
+        HR@10/NDCG@10 for that subsample in well under a minute.
+\end{enumerate}
+
+\section{Full source listings}
+
+The complete, unabridged source of every module described in
+Chapter~\ref{ch:methods} is reproduced below, exactly as used to produce
+the results in this report.
+
+\subsection{\texttt{src/eals.py}: the eALS algorithm}
+\lstinputlisting[language=Python]{../src/eals.py}
+
+\subsection{\texttt{src/evaluate.py}: HR@K / NDCG@K evaluation}
+\lstinputlisting[language=Python]{../src/evaluate.py}
+
+\subsection{\texttt{src/baselines.py}: Spark MLlib ALS reference}
+\lstinputlisting[language=Python]{../src/baselines.py}
+
+\subsection{\texttt{src/preprocess.py}: dataset filtering and splitting}
+\lstinputlisting[language=Python]{../src/preprocess.py}
+
+\subsection{\texttt{src/run\_experiments.py}: experiment driver}
+\lstinputlisting[language=Python]{../src/run_experiments.py}
+
+\subsection{\texttt{src/plot\_results.py}: figure generation}
+\lstinputlisting[language=Python]{../src/plot_results.py}
+
+\subsection{\texttt{tests/test\_eals\_synthetic.py}: correctness check}
+\lstinputlisting[language=Python]{../tests/test_eals_synthetic.py}

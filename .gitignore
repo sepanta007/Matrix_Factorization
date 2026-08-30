@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+*.crc
+_SUCCESS
+.idea/
+
+# LaTeX build artifacts (see latex/Makefile clean/purge targets)
+latex/*.aux
+latex/*.bbl
+latex/*.blg
+latex/*.log
+latex/*.out
+latex/*.toc
+latex/*.lof
+latex/*.lot
+latex/*.fls
+latex/*.fdb_latexmk
+latex/*.synctex.gz
+latex/chapters/*.aux

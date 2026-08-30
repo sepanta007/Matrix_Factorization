@@ -1,0 +1,93 @@
+\chapter{Problem Formulation}
+\label{ch:formulation}
+
+This chapter sets up the optimization problem eALS solves, starting from
+the plain matrix-factorization model and Hu et al.'s whole-data objective,
+before introducing the popularity-aware weighting scheme that
+distinguishes \citet{he2016eals} from earlier work and motivates the fast
+solver derived in Chapter~\ref{ch:methods}.
+
+\section{Matrix factorization for implicit feedback}
+
+Let $R \in \{0,1\}^{M\times N}$ be the user-item interaction matrix, with
+$M$ users and $N$ items. $\mathcal{R}$ denotes the set of user-item pairs
+with $r_{ui}=1$ (an observed, positive interaction); every other entry is
+zero. This is the crux of the implicit-feedback setting: a zero does not
+mean ``the user dislikes the item'', it means ``no signal was observed''.
+Matrix factorization approximates each entry as an inner
+product of a user latent vector $p_u \in \mathbb{R}^K$ and an item latent
+vector $q_i \in \mathbb{R}^K$, where $K$ is the number of latent factors, a
+hyperparameter fixed before training and shared by every user and item:
+\[
+  \hat{r}_{ui} = \langle p_u, q_i \rangle = p_u^\top q_i .
+\]
+Stacking the vectors gives $P \in \mathbb{R}^{M\times K}$ and
+$Q \in \mathbb{R}^{N\times K}$, the two matrices this project actually
+learns.
+
+\medskip
+\citet{hu2008implicit} formulate learning as a weighted regression over
+\emph{all} $M\times N$ entries, observed and missing alike:
+\[
+  J = \sum_{u=1}^{M}\sum_{i=1}^{N} w_{ui}(r_{ui}-\hat r_{ui})^2
+      + \lambda\Big(\sum_u \lVert p_u\rVert^2 + \sum_i \lVert q_i\rVert^2\Big),
+\]
+where $w_{ui}$ is a confidence weight and $\lambda$ is the usual $L_2$
+regularization strength. Whole-data learning of this kind is more faithful
+than sampling a handful of negative examples per user, but it is also the
+source of the whole efficiency problem this report is about: naively, every
+gradient step touches all $MN$ entries, most of which are the missing
+zeros. Hu et al.\ make this tractable by setting $w_{ui}$ to a single
+constant $w_0$ for every missing pair, which allows the missing-data
+contribution to be pre-computed once via $Q^\top Q$ and reused for every
+user.
+
+\section{Popularity-aware weighting}
+\label{sec:popweight}
+
+\citet{he2016eals} argue that this uniform-weight assumption discards
+information most content providers already have: items that are frequently
+recommended but rarely interacted with are more likely to be genuine
+negatives than obscure items nobody has seen. They replace the single
+missing-data term with a per-item confidence $c_i$, giving the objective
+actually implemented in this project:
+\begin{equation}
+  \label{eq:objective}
+  L = \sum_{(u,i)\in\mathcal{R}} w_{ui}(r_{ui}-\hat r_{ui})^2
+      + \sum_{u=1}^{M}\sum_{i \notin \mathcal{R}_u} c_i\, \hat r_{ui}^{\,2}
+      + \lambda\Big(\sum_u \lVert p_u\rVert^2 + \sum_i \lVert q_i\rVert^2\Big),
+\end{equation}
+where $\mathcal{R}_u$ is the set of items $u$ has interacted with, and,
+symmetrically, $\mathcal{R}_i$ denotes the set of users who have
+interacted with item $i$; both are used repeatedly in the rest of this
+report and in Chapter~\ref{ch:methods} in particular. The per-item
+confidence is derived from item popularity $f_i = |\mathcal{R}_i|
+/ \sum_j |\mathcal{R}_j|$ (item $i$'s share of all interactions in the
+training set):
+\begin{equation}
+  \label{eq:ci}
+  c_i = c_0\, \frac{f_i^{\alpha}}{\sum_{j} f_j^{\alpha}},
+\end{equation}
+with two hyperparameters: $c_0$ sets the overall strength of the
+missing-data penalty, and $\alpha$ controls how sharply popularity is
+rewarded. Setting $\alpha=0$ collapses \eqref{eq:ci} back to Hu et al.'s
+uniform weighting ($c_i \equiv c_0/N$ for every item), which makes $\alpha$
+a convenient dial between the two papers' assumptions and is exploited
+directly in this project's ablation study (Section~\ref{sec:weighting}).
+
+\section{Why the naive solver does not scale}
+
+Minimizing \eqref{eq:objective} with respect to a single user vector $p_u$,
+holding everything else fixed, has a closed-form ridge-regression solution
+that requires inverting a $K \times K$ matrix. Doing this once per user and
+once per item costs $O((M+N)K^3)$ per pass over the data, on top of an
+$O(|\mathcal{R}|K^2)$ term for the observed entries. The $K^3$ term
+dominates as soon as a moderately large number of latent factors is used,
+which is exactly the regime that gives MF its representational power.
+Hu et al.'s uniform-weight trick removes an $O(N)$ factor from the
+missing-data term but cannot remove the $K^3$ matrix inversion, because
+that cost comes from updating a whole vector at once, independently of how
+the missing data is weighted. Section~\ref{sec:ealsdesign} of the next
+chapter derives the reformulation that eALS uses to eliminate this term
+entirely, which is the paper's central algorithmic contribution and the
+piece of software this report builds and evaluates.

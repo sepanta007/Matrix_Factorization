@@ -1,0 +1,307 @@
+\chapter{The eALS Algorithm and its PySpark Implementation}
+\label{ch:methods}
+
+This chapter has two goals, matching the two things the assignment asks
+for separately. The first is to explain the algorithm eALS actually is:
+where its update rule comes from and why it is fast. The second is to walk
+through how that algorithm was mapped onto Spark, with the actual code that
+does it. All source files referenced here live under \texttt{src/} in the
+project repository; the full listings are reproduced in
+Appendix~\ref{app:code}.
+
+\section{Deriving the element-wise update}
+\label{sec:ealsdesign}
+
+The paper's key move is to stop updating a user's latent vector $p_u$ as a
+whole and instead optimize one coordinate $p_{uf}$ at a time, holding every
+other coordinate fixed: ordinary coordinate descent, applied to
+\eqref{eq:objective}. Setting $\partial L/\partial p_{uf}=0$ gives a
+closed-form update for a single coordinate that needs no matrix inversion:
+\begin{equation}
+  \label{eq:puf_naive}
+  p_{uf} = \frac{\sum_{i=1}^{N}(r_{ui}-\hat r_{ui}^f)\,w_{ui}\,q_{if}}
+                {\sum_{i=1}^{N} w_{ui}\,q_{if}^2 + \lambda},
+\end{equation}
+where $\hat r_{ui}^f = \hat r_{ui} - p_{uf}q_{if}$ is the prediction with
+factor $f$'s contribution removed. Taken at face value this is no better
+than before: the sum still runs over all $N$ items, most of which $u$ never
+touched. The paper's actual contribution is a reformulation that separates
+the observed part of the sum (small, $|\mathcal{R}_u|$ terms) from the
+missing part (large, $N-|\mathcal{R}_u|$ terms) and pre-computes the
+missing part once per iteration instead of once per user. Define the
+$K\times K$ cache
+\[
+  S^q = \sum_{i=1}^N c_i\, q_i q_i^\top ,
+\]
+which does not depend on $u$ at all. Because it does not depend on $u$, it
+can be computed once (a single matrix multiplication, $O(NK^2)$) and reused
+for \emph{every} user's update in that sweep. With $S^q$ available,
+\eqref{eq:puf_naive} becomes
+\begin{equation}
+  \label{eq:puf}
+  p_{uf} =
+  \frac{\sum_{i\in\mathcal{R}_u}\big[w_{ui}r_{ui}-(w_{ui}-c_i)\hat r_{ui}^f\big]q_{if}
+        - \sum_{k\neq f} p_{uk}\, s^q_{kf}}
+       {\sum_{i\in\mathcal{R}_u}(w_{ui}-c_i)\,q_{if}^2 + s^q_{ff} + \lambda},
+\end{equation}
+where $s^q_{kf}$ denotes the $(k,f)$ entry of the matrix $S^q$. This is the
+paper's Equation 12; the code comments in Appendix~\ref{app:code} cite it
+by that number rather than by the label used here. Every sum in
+Eq.~\ref{eq:puf} now runs only over $u$'s own observed items:
+$O(|\mathcal{R}_u|)$ work instead of $O(N)$. The item update $q_{if}$ is
+derived symmetrically, with one difference that deserves a flag, because it
+is the easiest place to introduce a bug when implementing this: the
+missing-data confidence $c_i$
+belongs to the \emph{item}, not the user, so it appears as a constant
+scalar multiplying the whole cache term, rather than as a per-neighbour
+weight the way it does in \eqref{eq:puf}:
+\begin{equation}
+  \label{eq:qif}
+  q_{if} =
+  \frac{\sum_{u\in\mathcal{R}_i}\big[w_{ui}r_{ui}-(w_{ui}-c_i)\hat r_{ui}^f\big]p_{uf}
+        - c_i\sum_{k\neq f} q_{ik}\, s^p_{kf}}
+       {\sum_{u\in\mathcal{R}_i}(w_{ui}-c_i)\,p_{uf}^2 + c_i\, s^p_{ff} + \lambda},
+\end{equation}
+where $s^p_{kf}$ denotes the $(k,f)$ entry of $S^p = P^\top P$ (unweighted,
+since popularity weighting in this formulation only lives on the item
+side); this is the paper's Equation 13, again cited by that number in the
+code comments. Getting Eq.~\ref{eq:qif}'s
+placement of $c_i$ wrong, treating it as a per-neighbour term like in
+Eq.~\ref{eq:puf} instead of a scalar multiplying the whole cache
+contribution, was in fact the first bug caught while implementing this
+project. Section~\ref{sec:correctness} describes how it was found.
+
+\medskip
+One more detail matters for both performance and correctness:
+$\hat r_{ui}^f$ never needs to be recomputed from scratch. Because the
+factors are updated one at a time in a fixed order, the current prediction
+$\hat r_{ui}$ can be maintained incrementally: subtract $p_{uf}q_{if}$
+before updating $p_{uf}$, then add the new $p_{uf}q_{if}$ back afterward,
+turning an $O(K)$ dot product into an $O(1)$ update. This is what brings the total
+per-iteration cost down from $O(MNK)$ (a naive coordinate-descent
+implementation, still touching every entry) to
+$O((M+N)K^2+|\mathcal{R}|K)$: linear in the number of observed
+interactions rather than quadratic in the size of the whole matrix.
+Algorithm~\ref{alg:eals} summarizes the full procedure.
+
+\begin{algorithm}[H]
+\caption{eALS -- one training iteration}
+\label{alg:eals}
+\begin{algorithmic}[1]
+\Require $\mathcal{R}$, $K$, $\lambda$, item confidences $c$, current $P, Q$
+\Ensure updated $P, Q$
+\State $S^q \leftarrow \sum_{i=1}^N c_i\, q_i q_i^\top$
+\ForAll{users $u = 1 \ldots M$ \textbf{(independent, parallel)}}
+    \ForAll{factors $f = 1 \ldots K$}
+        \State update $p_{uf}$ via Eq.~\ref{eq:puf}, using the cached $\hat r_{ui}$
+        \State refresh $\hat r_{ui}$ for $i \in \mathcal{R}_u$ in $O(1)$ per item
+    \EndFor
+\EndFor
+\State $S^p \leftarrow P^\top P$
+\ForAll{items $i = 1 \ldots N$ \textbf{(independent, parallel)}}
+    \ForAll{factors $f = 1 \ldots K$}
+        \State update $q_{if}$ via Eq.~\ref{eq:qif}, using the cached $\hat r_{ui}$
+        \State refresh $\hat r_{ui}$ for $u \in \mathcal{R}_i$ in $O(1)$ per user
+    \EndFor
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+One more piece of the algorithm is worth deriving before moving to the
+implementation, since it is what produces every loss curve in this report:
+checking convergence needs the value of the objective $L$ itself, not just
+the updated $P$ and $Q$. Computed directly from \eqref{eq:objective}, this
+would cost $O(MNK)$, dominated by the same missing-data sum that made the
+naive update slow in the first place. The paper's Equation 14 avoids this
+with the same trick used for the updates: reusing $S^q$,
+\[
+  \sum_{u=1}^{M}\sum_{i\notin\mathcal{R}_u} c_i\,\hat r_{ui}^{\,2}
+  = \sum_{u=1}^{M} p_u^\top S^q p_u - \sum_{(u,i)\in\mathcal{R}} c_i\,\hat r_{ui}^{\,2},
+\]
+which turns the missing-data term of $L$ into a sum over just $M$ users
+plus a correction over the (much smaller) observed set $\mathcal{R}$,
+bringing the cost down to $O(|\mathcal{R}|+MK^2)$.
+\texttt{EALS.compute\_loss} in \texttt{src/eals.py} implements exactly this
+expression; it is what produced the loss values reported in
+Section~\ref{sec:correctness} and plotted in the demonstration notebook
+(Appendix~\ref{app:notebook}).
+
+\section{Why this is embarrassingly parallel}
+\label{sec:parallel}
+
+The paper observes, but does not build, the following fact: within the
+user-update loop of Algorithm~\ref{alg:eals}, $Q$ and $S^q$ are read-only
+for the whole duration of the loop, and each user's update writes only to
+that user's own row of $P$. No user's update reads any other user's
+current or past state. The order in which users are processed therefore
+does not affect the result, and the loop can be split across an arbitrary
+number of workers with no coordination beyond having $Q$ and $S^q$
+available to all of them. This is a stronger property than
+``parallelizable with some loss of accuracy'', which is what one gets from
+naively parallelizing SGD, where different workers' updates can conflict.
+eALS's parallel execution is instead bit-for-bit equivalent, up to
+floating-point summation order, to running it on a single machine. The same
+argument applies to the item loop.
+
+\section{Mapping the algorithm onto Spark}
+\label{sec:spark}
+
+Section~\ref{sec:parallel} argued that Algorithm~\ref{alg:eals}'s two
+sweeps can be split across workers with no coordination and no loss of
+accuracy. This section describes how that argument was turned into actual
+Spark code, then checked for correctness.
+
+\subsection{Design}
+
+The implementation, \texttt{src/eals.py}, keeps $P$ and $Q$ as ordinary
+NumPy arrays on the Spark driver. At the scale evaluated in this report
+($33{,}326$ users, $21{,}901$ items, $K$ up to $128$), both matrices
+comfortably fit in memory, and keeping them there avoids the overhead of shuffling
+factor updates through Spark's DataFrame machinery on every single
+coordinate. What \emph{is} distributed is the actual computation described
+in Section~\ref{sec:parallel}: the id space $\{0,\dots,M-1\}$ (respectively
+$\{0,\dots,N-1\}$) is partitioned with \texttt{sc.parallelize(...).glom()},
+$Q$, $S^q$ and each user's interaction list are broadcast to every
+executor, and the closed-form update of Eq.~\ref{eq:puf} runs as ordinary
+NumPy code inside each partition, with no further communication until the
+results are collected back to the driver and written into $P$. Listing
+\ref{lst:update_users} shows the actual per-partition update routine.
+
+\begin{lstlisting}[language=Python, caption={Closed-form user update, Eq.~\ref{eq:puf}, executed inside one Spark partition (\texttt{src/eals.py}).}, label={lst:update_users}]
+def _update_users_chunk(
+    ids_chunk, user_ratings, P, Q, item_conf, Sq, reg, w_obs,
+):
+    """Eq. (12): closed-form update of p_uf for every user in
+    `ids_chunk`, iterating f=1..K."""
+    K = P.shape[1]
+    out = np.empty((len(ids_chunk), K), dtype=np.float64)
+    for row, u in enumerate(ids_chunk):
+        neighbors = user_ratings.get(u)
+        pu = P[u].copy()
+        if neighbors is None or len(neighbors) == 0:
+            out[row] = pu
+            continue
+        Qu = Q[neighbors]                # |R_u| x K
+        cu = item_conf[neighbors]        # |R_u|, c_i per neighbor item
+        rhat = Qu @ pu
+        for f in range(K):
+            rhat_f = rhat - pu[f] * Qu[:, f]
+            numer = np.sum((w_obs - (w_obs - cu) * rhat_f) * Qu[:, f]) \
+                    - (pu @ Sq[:, f] - pu[f] * Sq[f, f])
+            denom = np.sum((w_obs - cu) * Qu[:, f] ** 2) + Sq[f, f] + reg
+            new_val = numer / denom if denom > 1e-12 else 0.0
+            rhat = rhat_f + new_val * Qu[:, f]   # O(1) prediction refresh
+            pu[f] = new_val
+        out[row] = pu
+    return out
+\end{lstlisting}
+
+Every identifier in Listing~\ref{lst:update_users} corresponds to a
+quantity in Eq.~\ref{eq:puf}: \texttt{reg} is $\lambda$, \texttt{w\_obs} is
+$w_{ui}$ for observed entries, \texttt{cu} holds $c_i$ for each item in
+$u$'s neighbor list, and \texttt{Sq} is the cached matrix $S^q$.
+\texttt{rhat\_f} is $\hat r_{ui}^f$, the first summand of
+\texttt{numer} is the observed-data term, the subtraction is
+$\sum_{k\neq f} p_{uk}s^q_{kf}$ (computed as a full dot product minus the
+$k=f$ term, which is cheaper than an explicit loop excluding one index),
+and \texttt{denom} is the closed-form denominator. The reassignment
+\texttt{rhat = rhat\_f + new\_val * Qu[:, f]}, executed right after
+\texttt{new\_val} is computed and before the loop moves to the next
+factor, is the $O(1)$ prediction maintenance from
+Section~\ref{sec:ealsdesign}: it folds the newly computed $p_{uf}$ back
+into the running prediction before moving on to factor $f+1$, matching the
+Gauss-Seidel semantics of the paper's Algorithm~1 (each factor update
+immediately sees the previous factors' new values, within the same user,
+in the same sweep).
+
+\medskip
+The driver-side training loop, shown in abbreviated form in
+Listing~\ref{lst:fit}, follows Algorithm~\ref{alg:eals} step for step: it
+recomputes $S^q$ from the current $Q$, dispatches the parallel user sweep,
+waits for it to complete and folds the results back into $P$, then repeats
+the same pattern for $S^p$ and the item sweep.
+
+\begin{lstlisting}[language=Python, caption={Driver-side training loop (excerpt from \texttt{EALS.fit}, \texttt{src/eals.py}).}, label={lst:fit}]
+for it in range(cfg.n_iters):
+    # ---- update user factors: Algorithm 1, lines 4-11 -------------
+    Sq = factor_cache(self.Q, self.item_conf)
+    Q_b, Sq_b, P_local = sc.broadcast(self.Q), sc.broadcast(Sq), self.P
+
+    def upd_users(ids_chunk, ur=ur_b, Qb=Q_b, Sqb=Sq_b, icb=ic_b,
+                  cfg=cfg, P=P_local):
+        ids_chunk = np.asarray(ids_chunk)
+        res = _update_users_chunk(ids_chunk, ur.value, P, Qb.value,
+                                   icb.value, Sqb.value, cfg.reg, cfg.w_obs)
+        return list(zip(ids_chunk.tolist(), res.tolist()))
+
+    for uid, vec in user_chunks.flatMap(upd_users).collect():
+        self.P[uid] = vec
+    Q_b.unpersist(); Sq_b.unpersist()
+
+    # ---- update item factors: Algorithm 1, lines 12-19 -------------
+    Sp = factor_cache(self.P)
+    # ... symmetric flatMap over item_chunks, updating self.Q ...
+\end{lstlisting}
+
+\medskip
+Two implementation choices deserve to be made explicit, since both were
+deliberate and both trade a bit of theoretical elegance for something that
+actually runs reliably.
+
+\begin{bulletlist}
+  \item \textbf{Broadcast, not shuffle.} An alternative design would keep
+        $P$ and $Q$ as Spark DataFrames and express the update as a join
+        between users and their rated items. This was tried early on and
+        abandoned: it forces a shuffle on every single coordinate update
+        (there are $K$ of them per sweep), and Spark's DataFrame/Catalyst
+        overhead per job dwarfs the few milliseconds of actual NumPy work
+        each partition does at this problem size. Broadcasting the (small)
+        $K\times K$ cache and the (moderate) $Q$ matrix, and only
+        distributing the large but embarrassingly parallel per-user
+        computation, keeps the number of Spark jobs at exactly two per
+        iteration instead of $2K$.
+  \item \textbf{One partition, one NumPy loop.} Each partition still
+        contains a plain Python \texttt{for} loop over its assigned users.
+        This is the one place a purely mathematical description of the
+        algorithm and its actual runtime cost part ways: for the dataset
+        used in this report, the inner loop is dominated by Python function
+        call overhead rather than the O($K$)-per-item arithmetic itself,
+        which is the reason Section~\ref{sec:scale_k} finds close-to-linear
+        rather than perfectly linear scaling in $K$.
+\end{bulletlist}
+
+\subsection{A note on correctness}
+\label{sec:correctness}
+
+Because the two update rules, Eq.~\ref{eq:puf} and Eq.~\ref{eq:qif}, look
+almost identical but are not, the implementation was checked in two
+independent ways before trusting it on real data.
+
+\medskip
+First, a synthetic dataset with a known block structure was constructed:
+three disjoint communities of 15 users and 15 items each, where every
+interaction stays within its own community. A correct factorization has no
+reason to ever mix latent directions across communities, so a trained model
+should rank a user's own community's items far above the other two. This
+is exactly what happens: after 20 iterations the training loss decreases
+monotonically from 145.7 to 83.8, and the top-10 recommended items for a
+probed user are all drawn from that user's own community (see
+\texttt{tests/test\_eals\_synthetic.py} and the corresponding notebook
+cell, Appendix~\ref{app:notebook}). Monotonic loss decrease is not a given
+here, since coordinate descent on a non-convex objective can still increase
+the loss if a single update is wrong, so this is a meaningful check and not
+a formality.
+
+\medskip
+Second, and more usefully, an early version of \texttt{\_update\_items\_chunk}
+reused the same helper function as the user update, passing an array of
+all-ones as the per-neighbor confidence instead of correctly scaling the
+whole cache term by the item's own $c_i$ as Eq.~\ref{eq:qif} requires. This
+silently zeroed out the $(w_{ui}-c_i)$ correction on the item side, without
+crashing or producing an obviously wrong-looking loss curve. It is the
+kind of bug that a synthetic sanity check alone would not necessarily have
+caught, since the community-separation test still passes with weaker item
+updates. It was only found by re-deriving Eq.~\ref{eq:qif} term by term
+against the implementation, which is why Section~\ref{sec:ealsdesign}
+above spells out the derivation in enough detail to make that comparison
+possible for a reader, rather than just stating the final formula.

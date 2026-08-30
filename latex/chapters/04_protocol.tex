@@ -1,0 +1,137 @@
+\chapter{Dataset and Experimental Protocol}
+\label{ch:protocol}
+
+Having derived and implemented eALS, we now turn to how it is evaluated:
+which dataset was used and how it was filtered and split, which metrics
+quantify accuracy, and which hyperparameters are held fixed across the
+experiments of Chapters~\ref{ch:results} and~\ref{ch:scalability}.
+
+\section{Dataset}
+
+The paper evaluates on two datasets, the Yelp Challenge dataset and Amazon
+``Movies and TV'' reviews, and the assignment brief asks for the
+experimental analysis to use one of them rather than a substitute such as
+MovieLens, so the choice between the two was really a choice of which one
+was still reachable. The Yelp Challenge dataset, in the specific form the
+paper used it, a static 2015 snapshot of roughly 1.6 million reviews
+distributed directly by Yelp as a downloadable archive for that
+competition, is no longer available. Yelp has since folded that data into
+an ``Open Dataset'' aimed at a different use case (business listings for
+their own developer program): not the same snapshot, not the same schema,
+and not redistributed in a form that would let this project reproduce the
+paper's exact filtering pipeline. Reconstructing something merely
+\emph{similar} to it would have quietly broken the assignment's requirement
+of testing on ``one of the datasets used by the paper'', so this project
+uses the Amazon dataset instead, which remains available essentially as
+the paper used it: the ratings-only CSV hosted by the Stanford Network
+Analysis Project \citep{amazonreviews}, downloaded directly and not
+modified beyond the filtering described below. It contains
+4{,}607{,}047 raw \texttt{(user, item, rating, timestamp)} rows. Every
+rating is binarized to a positive implicit interaction ($r_{ui}=1$); the
+rating value itself is discarded, matching the paper's treatment of the
+data (``we transform the review dataset into implicit data, where each
+entry is marked as 0/1 indicating whether the user reviewed the item'').
+
+\subsection{Filtering}
+
+Following the paper, users and items with fewer than 10 interactions are
+removed, since extremely sparse users and items make offline evaluation
+unreliable (over half the users in the raw Amazon data have only a single
+review) without being representative of what a production recommender
+would face. Removing sparse users can push some items below the threshold
+and vice versa, so the filter has to be applied \emph{iteratively} until it
+reaches a fixed point. \texttt{src/preprocess.py} repeats the
+filter-and-recount step up to 50 times and explicitly checks for
+convergence rather than assuming a fixed number of passes is enough. On
+this dataset the filter took 20 rounds to fully stabilize (from
+4{,}607{,}047 interactions after the first pass down to 1{,}204{,}688, then
+shrinking by a decreasing amount each round until round 20 leaves the count
+unchanged at 958{,}986). An earlier version of this pipeline capped the
+filter at 10 rounds, which removes over 99.9\% of what the full filter
+would remove but is not exact; this was caught and corrected, and
+Table~\ref{tab:dataset} reports the fully converged numbers.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lrr}
+\toprule
+ & Paper (Amazon) & This project \\
+\midrule
+Users        & 117{,}176   & 33{,}326 \\
+Items        & 75{,}389    & 21{,}901 \\
+Interactions & 5{,}020{,}705 & 958{,}986 \\
+Sparsity     & 99.94\%     & 99.87\% \\
+\bottomrule
+\end{tabular}
+\caption{Dataset statistics after 10-core filtering, paper versus this
+project.}
+\label{tab:dataset}
+\end{table}
+
+\medskip
+The two datasets are visibly not the same scale. This is not a filtering
+bug: the CSV currently hosted by SNAP is a later, differently-curated
+snapshot of Amazon review data than the one the authors filtered in 2016,
+so the raw interaction counts already diverge before any filtering is
+applied. Section~\ref{sec:weaknesses} returns to what this scale
+difference does and does not change about the conclusions drawn from the
+experiments.
+
+\subsection{Splitting}
+
+Interactions are re-indexed to dense integer ranges $[0,M)$ and $[0,N)$ and
+split with the same leave-one-out protocol as the paper's offline setting
+(Section 5.1 of \citealp{he2016eals}): each user's chronologically latest
+interaction is held out as the test item, and the remaining interactions
+form the training set. This protocol evaluates a model's ability to
+predict a known user's next interaction from their history; it does not
+test cold-start behaviour for new users, since by construction every test
+user has training history.
+
+\section{Evaluation metrics}
+
+Two ranking metrics are used, matching the paper: \textbf{Hit Ratio}
+(HR@$k$), the fraction of test users for whom the held-out item appears in
+the top-$k$ of the model's ranked recommendations, and \textbf{Normalized
+Discounted Cumulative Gain} (NDCG@$k$), which additionally rewards ranking
+the held-out item near the top rather than merely inside the top-$k$:
+\[
+  \mathrm{NDCG@}k = \frac{1}{|\mathcal{T}|}\sum_{(u,i)\in\mathcal{T}}
+  \frac{\mathbb{1}[\mathrm{rank}(u,i) < k]}{\log_2(\mathrm{rank}(u,i)+2)},
+\]
+where $\mathcal{T}$ is the test set and $\mathrm{rank}(u,i)$ is the
+position of the held-out item $i$ in $u$'s ranked list (0-indexed). Both
+metrics are implemented in \texttt{src/evaluate.py}.
+
+\medskip
+One deliberate deviation from the paper is worth stating plainly here
+rather than leaving it implicit. The paper ranks the held-out item against
+the \emph{entire} item catalog for every test user. This is the exact
+protocol, and \texttt{evaluate\_full} in \texttt{src/evaluate.py}
+implements it faithfully; it is exercised in the small-data notebook
+(Appendix~\ref{app:notebook}), where re-ranking the whole 45-item toy
+catalog costs almost nothing. For the large-scale experiments in
+Chapters~\ref{ch:results} and~\ref{ch:scalability}, which retrain the model
+dozens of times over a grid of hyperparameters, ranking against the full
+21{,}901-item catalog for all 33{,}326 test users on every single
+evaluation point would dominate the total experiment time and add nothing
+the scalability study is meant to measure. Instead,
+\texttt{evaluate\_sampled} ranks the held-out item against 99 items the
+user never interacted with, sampled uniformly at random, and reports
+HR@10/NDCG@10 on that shorter list. This is the same relaxation used in
+later work by the same first author \citep{he2017ncf}, and it is now
+standard practice in the recommender-systems literature for exactly this
+reason.
+
+\section{Experimental setup}
+
+Unless stated otherwise, experiments use $\lambda=0.01$ (matching the
+paper's choice, made ``for a fair comparison'' across methods),
+$w_{ui}=1$ for observed interactions (also matching the paper), and
+$K=32$ latent factors as the default operating point, with dedicated
+sweeps over $K \in \{8,16,32,64,128\}$ for the scalability study. All
+experiments run on a single machine (Spark in local mode, up to 8
+partitions unless the experiment is specifically varying the partition
+count) rather than a real cluster; Chapter~\ref{ch:discussion} discusses
+what this does and does not tell us about behaviour on an actual
+distributed deployment.

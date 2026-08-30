@@ -1,0 +1,49 @@
+\chapter{Conclusion}
+\label{ch:conclusion}
+
+This project set out to answer a question the paper itself leaves open:
+does eALS's parallelizability, argued on paper, hold up when actually
+built in a distributed engine? The answer, based on the experiments in
+Chapters~\ref{ch:results} and~\ref{ch:scalability}, is yes. The PySpark
+implementation reproduces the paper's element-wise update rule term for
+term (Chapter~\ref{ch:methods}), reaches the same optimal missing-data
+weight $c_0=512$ the paper reports for the Amazon dataset despite training
+on a differently-sized snapshot of it, converges to a stable solution
+within roughly ten iterations with no learning rate to tune, and scales in
+training time with $10.9\times$ growth for a $16\times$ increase in $K$,
+far below the $4096\times$ a cubic solver would need, and it lands in the
+same qualitative regime as Spark MLlib's own production-grade ALS.
+
+\medskip
+Not everything reproduced cleanly. The popularity-aware weighting
+scheme's advantage over plain uniform weighting, a clearly significant
+effect in the paper, showed up here only as a small and statistically
+untested difference (Section~\ref{sec:weighting}), most plausibly because
+this project's dataset, filtered from a different and smaller snapshot of
+the same source, carries a less pronounced popularity signal than the
+one the paper trained on. The parallelism experiment's finding that four
+partitions beat eight or sixteen (Section~\ref{sec:scale_par}) is a
+statement about single-machine task-scheduling overhead, not about the
+algorithm's parallelizability itself, which Section~\ref{sec:parallel}'s
+independence argument guarantees regardless of partition count. And the
+project deliberately stops at the paper's offline Algorithm~1, leaving its
+online incremental-update extension (Algorithm~2) out of scope, in line
+with what the assignment brief asks for.
+
+\medskip
+Building the implementation also surfaced a lesson that the paper's own
+complexity analysis does not make visible. At this project's scale, the
+gap between eALS and Spark MLlib's ALS was not decided by which algorithm
+does asymptotically less work, but by an engineering choice: broadcasting
+$Q$ and $S^q$ once per sweep instead of shuffling factor updates through
+Spark's DataFrame machinery, and a plain Python loop instead of a
+vectorized or compiled one (Section~\ref{sec:weaknesses}). A correct
+distributed algorithm and a fast distributed implementation of it are two
+different things to get right, and this project only fully closed the gap
+on the first.
+
+\medskip
+The assignment brief really asks two questions: is eALS efficient, and is
+it parallelizable without approximation? Both held up under direct
+measurement, on real data, in a real distributed engine, which is the one
+thing the paper's own single-threaded benchmarks could not show.
